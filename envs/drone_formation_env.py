@@ -1,10 +1,10 @@
-import gym
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
-from gym import spaces
 
 
 class DroneFormationEnv(gym.Env):
-    metadata = {"render.modes": []}
+    metadata = {"render_modes": []}
 
     def __init__(
         self,
@@ -36,11 +36,14 @@ class DroneFormationEnv(gym.Env):
         self.target = np.array([0., 3., 1.2], dtype=np.float32)
         self.offset = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 
+        self.collision_dist = 0.25
         self.w_target = 1.2
         self.w_form = 2.0
         self.w_tilt = 0.05
         self.w_energy = 0.001
-        self.collision_dist = 0.25
+
+        self.init_noise = 0.2
+        self.target_moving = False
 
         self.obs_dim = 30
         self.observation_space = spaces.Box(
@@ -50,14 +53,31 @@ class DroneFormationEnv(gym.Env):
         self.action_space = spaces.Box(low=-1., high=1., shape=(8,), dtype=np.float32)
 
         self.rng = np.random.default_rng()
-        self.reset()
+        self.reset(seed=None)
+
+    def set_wind_std(self, std):
+        self.wind_std = float(std)
+
+    def set_init_noise(self, level):
+        self.init_noise = float(level)
+
+    def set_target_motion(self, enabled):
+        self.target_moving = bool(enabled)
+
+    def set_collision_dist(self, d):
+        self.collision_dist = float(d)
+
+    def set_reward_weights(self, wt, wf, wi, we):
+        self.w_target = float(wt)
+        self.w_form = float(wf)
+        self.w_tilt = float(wi)
+        self.w_energy = float(we)
 
     def _euler_to_rot(self, ang):
         roll, pitch, yaw = ang
         cr, sr = np.cos(roll), np.sin(roll)
         cp, sp = np.cos(pitch), np.sin(pitch)
         cy, sy = np.cos(yaw), np.sin(yaw)
-
         return np.array([
             [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
             [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
@@ -65,13 +85,11 @@ class DroneFormationEnv(gym.Env):
         ], dtype=np.float32)
 
     def _motor_thrusts(self, a):
-        a = np.clip(a, -1.0, 1.0)
-        u = 0.5 * (a + 1.0)
+        u = 0.5 * (np.clip(a, -1, 1) + 1.0)
         return u * self.max_thrust
 
     def _drone_step(self, p, v, ang, omega, motors, wind):
         R = self._euler_to_rot(ang)
-
         thrust_body = np.array([0., 0., np.sum(motors)], dtype=np.float32)
         thrust_world = R @ thrust_body
         acc = thrust_world / self.mass + self.g + wind
@@ -80,13 +98,11 @@ class DroneFormationEnv(gym.Env):
         speed = np.linalg.norm(v)
         if speed > self.max_lin_vel:
             v *= self.max_lin_vel / (speed + 1e-6)
-
         p = p + v * self.dt
 
         T1, T2, T3, T4 = motors
         l = self.arm
         k_yaw = 0.01
-
         tau = np.array([
             l * (T2 - T4),
             l * (T3 - T1),
@@ -94,7 +110,6 @@ class DroneFormationEnv(gym.Env):
         ], dtype=np.float32)
 
         omega = omega + (self.inv_inertia @ (tau - np.cross(omega, self.inertia @ omega))) * self.dt
-
         ang = ang + omega * self.dt
 
         w_norm = np.linalg.norm(omega)
@@ -114,17 +129,19 @@ class DroneFormationEnv(gym.Env):
         ]).astype(np.float32)
 
     def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
         self.step_count = 0
 
-        self.p1 = np.array([0., 0., 1.2], dtype=np.float32) + self.rng.normal(0, 0.2, 3)
+        noise = self.init_noise
+        self.p1 = np.array([0., 0., 1.2]) + self.rng.normal(0, noise, 3)
         self.v1 = self.rng.normal(0., 0.1, 3).astype(np.float32)
         self.ang1 = self.rng.normal(0., 0.05, 3).astype(np.float32)
         self.omega1 = self.rng.normal(0., 0.3, 3).astype(np.float32)
 
-        self.p2 = self.p1 + self.offset + self.rng.normal(0, 0.05, 3)
+        self.p2 = self.p1 + self.offset + self.rng.normal(0, noise * 0.5, 3)
         self.v2 = self.rng.normal(0., 0.1, 3).astype(np.float32)
         self.ang2 = self.rng.normal(0., 0.05, 3).astype(np.float32)
         self.omega2 = self.rng.normal(0., 0.3, 3).astype(np.float32)
@@ -141,12 +158,11 @@ class DroneFormationEnv(gym.Env):
         wind1 = self.rng.normal(0, self.wind_std, 3).astype(np.float32) if self.use_wind else np.zeros(3)
         wind2 = self.rng.normal(0, self.wind_std, 3).astype(np.float32) if self.use_wind else np.zeros(3)
 
-        self.p1, self.v1, self.ang1, self.omega1 = self._drone_step(
-            self.p1, self.v1, self.ang1, self.omega1, m1, wind1
-        )
-        self.p2, self.v2, self.ang2, self.omega2 = self._drone_step(
-            self.p2, self.v2, self.ang2, self.omega2, m2, wind2
-        )
+        self.p1, self.v1, self.ang1, self.omega1 = self._drone_step(self.p1, self.v1, self.ang1, self.omega1, m1, wind1)
+        self.p2, self.v2, self.ang2, self.omega2 = self._drone_step(self.p2, self.v2, self.ang2, self.omega2, m2, wind2)
+
+        if self.target_moving:
+            self.target += np.array([0.001, 0.002, 0.0005], dtype=np.float32)
 
         dist_target = np.linalg.norm(self.p1 - self.target)
         form_error = np.linalg.norm((self.p2 - self.p1) - self.offset)
@@ -155,10 +171,10 @@ class DroneFormationEnv(gym.Env):
         inter = np.linalg.norm(self.p2 - self.p1)
 
         reward = (
-            -1.2 * dist_target
-            - 2.0 * form_error
-            - 0.05 * tilt
-            - 0.001 * energy
+            -self.w_target * dist_target
+            - self.w_form * form_error
+            - self.w_tilt * tilt
+            - self.w_energy * energy
         )
         if inter < self.collision_dist:
             reward -= 5.0
@@ -168,7 +184,6 @@ class DroneFormationEnv(gym.Env):
         terminated = False
         truncated = self.step_count >= self.episode_len
 
-        obs = self._get_obs()
         info = {
             "dist_target": float(dist_target),
             "form_error": float(form_error),
@@ -177,7 +192,7 @@ class DroneFormationEnv(gym.Env):
             "inter_drone_dist": float(inter),
         }
 
-        return obs, reward, terminated, truncated, info
+        return self._get_obs(), float(reward), terminated, truncated, info
 
     def render(self):
         pass
