@@ -34,10 +34,10 @@ def drone_mesh(px, py, pz, ang, size=0.3):
         [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
         [-sp, cp * sr, cp * cr]
     ])
-    arm1 = np.array([[ size,0,0],[-size,0,0]]).T
-    arm2 = np.array([[0, size,0],[0,-size,0]]).T
-    arm1 = (R @ arm1).T + np.array([px,py,pz])
-    arm2 = (R @ arm2).T + np.array([px,py,pz])
+    arm1 = np.array([[size, 0, 0], [-size, 0, 0]]).T
+    arm2 = np.array([[0, size, 0], [0, -size, 0]]).T
+    arm1 = (R @ arm1).T + np.array([px, py, pz])
+    arm2 = (R @ arm2).T + np.array([px, py, pz])
     return arm1, arm2
 
 
@@ -78,7 +78,7 @@ def main():
 
     model = SAC.load("./models/best/best_model.zip", env=vecnorm, device=device)
 
-    obs, _ = vecnorm.reset()
+    obs = vecnorm.reset()
 
     p1s, p2s, ts = [], [], []
     v1s, v2s, a1s, a2s = [], [], [], []
@@ -86,11 +86,12 @@ def main():
     rs, ds, fs, tls, ints = [], [], [], [], []
 
     done = False
-    trunc = False
 
-    while not (done or trunc):
+    while not done:
         action, _ = model.predict(obs, deterministic=True)
-        obs, r, done, trunc, info = vecnorm.step(action)
+        obs, r, dones, infos = vecnorm.step(action)
+        done = bool(dones[0])
+        info = infos[0]
 
         raw = vecnorm.get_original_obs()[0]
         p1, v1, ang1, _, p2, v2, ang2, _, target, _ = unpack_obs(raw)
@@ -174,29 +175,29 @@ def main():
     line2x, = ax.plot([], [], [], "g-", linewidth=3)
     line2y, = ax.plot([], [], [], "g-", linewidth=3)
 
-    xmin = min(p1s[:,0].min(), p2s[:,0].min())-1
-    xmax = max(p1s[:,0].max(), p2s[:,0].max())+1
-    ymin = min(p1s[:,1].min(), p2s[:,1].min())-1
-    ymax = max(p1s[:,1].max(), p2s[:,1].max())+1
+    xmin = min(p1s[:, 0].min(), p2s[:, 0].min()) - 1
+    xmax = max(p1s[:, 0].max(), p2s[:, 0].max()) + 1
+    ymin = min(p1s[:, 1].min(), p2s[:, 1].min()) - 1
+    ymax = max(p1s[:, 1].max(), p2s[:, 1].max()) + 1
     zmin = 0
-    zmax = max(p1s[:,2].max(), p2s[:,2].max())+1
+    zmax = max(p1s[:, 2].max(), p2s[:, 2].max()) + 1
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
     ax.set_zlim(zmin, zmax)
 
     def upd(i):
-        arm1a, arm1b = drone_mesh(p1s[i,0], p1s[i,1], p1s[i,2], ang1s[i])
-        arm2a, arm2b = drone_mesh(p2s[i,0], p2s[i,1], p2s[i,2], ang2s[i])
+        arm1a, arm1b = drone_mesh(p1s[i, 0], p1s[i, 1], p1s[i, 2], ang1s[i])
+        arm2a, arm2b = drone_mesh(p2s[i, 0], p2s[i, 1], p2s[i, 2], ang2s[i])
 
-        line1x.set_data([arm1a[0,0], arm1a[1,0]], [arm1a[0,1], arm1a[1,1]])
-        line1x.set_3d_properties([arm1a[0,2], arm1a[1,2]])
-        line1y.set_data([arm1b[0,0], arm1b[1,0]], [arm1b[0,1], arm1b[1,1]])
-        line1y.set_3d_properties([arm1b[0,2], arm1b[1,2]])
+        line1x.set_data([arm1a[0, 0], arm1a[1, 0]], [arm1a[0, 1], arm1a[1, 1]])
+        line1x.set_3d_properties([arm1a[0, 2], arm1a[1, 2]])
+        line1y.set_data([arm1b[0, 0], arm1b[1, 0]], [arm1b[0, 1], arm1b[1, 1]])
+        line1y.set_3d_properties([arm1b[0, 2], arm1b[1, 2]])
 
-        line2x.set_data([arm2a[0,0], arm2a[1,0]], [arm2a[0,1], arm2a[1,1]])
-        line2x.set_3d_properties([arm2a[0,2], arm2a[1,2]])
-        line2y.set_data([arm2b[0,0], arm2b[1,0]], [arm2b[0,1], arm2b[1,1]])
-        line2y.set_3d_properties([arm2b[0,2], arm2b[1,2]])
+        line2x.set_data([arm2a[0, 0], arm2a[1, 0]], [arm2a[0, 1], arm2a[1, 1]])
+        line2x.set_3d_properties([arm2a[0, 2], arm2a[1, 2]])
+        line2y.set_data([arm2b[0, 0], arm2b[1, 0]], [arm2b[0, 1], arm2b[1, 1]])
+        line2y.set_3d_properties([arm2b[0, 2], arm2b[1, 2]])
 
         return line1x, line1y, line2x, line2y
 
@@ -204,26 +205,13 @@ def main():
     ani.save("eval_outputs/traj.gif", writer="pillow", fps=15)
     plt.close(fig)
 
-    xs = load_training_metrics()
-    if xs is not None:
-        steps, rvals, cvals, evals = xs
-        fig, axs = plt.subplots(3, 1, figsize=(12, 9))
-        for v in rvals: axs[0].plot(v)
-        for v in cvals: axs[1].plot(v)
-        for v in evals: axs[2].plot(v)
-        axs[0].set_title("Reward")
-        axs[1].set_title("Critic loss")
-        axs[2].set_title("Entropy coef")
-        plt.savefig("eval_outputs/train_metrics.png", dpi=300)
-        plt.close(fig)
-
     try:
         import plotly.graph_objs as go
         from plotly.offline import plot as pf
 
-        tr1 = go.Scatter3d(x=p1s[:,0], y=p1s[:,1], z=p1s[:,2], mode="lines")
-        tr2 = go.Scatter3d(x=p2s[:,0], y=p2s[:,1], z=p2s[:,2], mode="lines")
-        tr3 = go.Scatter3d(x=ts[:,0], y=ts[:,1], z=ts[:,2], mode="lines", line=dict(color="red"))
+        tr1 = go.Scatter3d(x=p1s[:, 0], y=p1s[:, 1], z=p1s[:, 2], mode="lines")
+        tr2 = go.Scatter3d(x=p2s[:, 0], y=p2s[:, 1], z=p2s[:, 2], mode="lines")
+        tr3 = go.Scatter3d(x=ts[:, 0], y=ts[:, 1], z=ts[:, 2], mode="lines", line=dict(color="red"))
         fig = go.Figure(data=[tr1, tr2, tr3])
         fig.update_layout(title="3D Trajectory")
         pf(fig, filename="eval_outputs/traj_interactive.html", auto_open=False)
